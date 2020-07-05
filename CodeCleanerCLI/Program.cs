@@ -17,7 +17,7 @@ namespace CodeCleanerCLI
         static async Task Main(string[] args)
         {
             //var solutionFile = args[0];
-            var targetFile = @"..\DemoProject\ConsoleApp\ConsoleApp.sln";
+            var targetFile = @"..\..\..\..\DemoProject\ConsoleApp\ConsoleApp.sln";
             //var targetFile = @"D:\Projects\doggy\doggy.csproj";
             bool isSolution = targetFile.EndsWith(".sln");
             Console.WriteLine($"target[{(isSolution ? "solution" : "project")}]: {targetFile}");
@@ -40,7 +40,7 @@ namespace CodeCleanerCLI
 
             Dictionary<ISymbol, List<ReferencedSymbol>> typeRefs = new Dictionary<ISymbol, List<ReferencedSymbol>>();
 
-            await foreach(var type in GetAllNamedType(solution))
+            await foreach(var type in solution.GetAllNamedType())
             {
                 var refs = await SymbolFinder.FindReferencesAsync(type, solution);
                 typeRefs.Add(type, refs.ToList());
@@ -116,10 +116,7 @@ namespace CodeCleanerCLI
             foreach(var type in usedTypes)
             {
                 var refs = typeRefs[type];
-
-                //标记为used，但是refs为空，可能是扩展方法类
-                //if (refs.Sum(r => r.Locations.Count()) == 0) continue;
-
+                
                 var usages = refs.SelectMany(r => r.Locations.Select(l =>
                 {
                     if (l.IsInDefinition(type)) return UsageType.UsedBySelf;
@@ -133,10 +130,6 @@ namespace CodeCleanerCLI
 
             }
             usedTypes.ExceptWith(usedByNotUsedTypeTypes);
-            //foreach (var type in usedTypes)
-            //{
-            //    Console.WriteLine($"[used]{type.Name}");
-            //}
             Console.WriteLine($"[notUsedTotal]{notUsedTypes.Count + usedBySelfTypes.Count + usedByNotUsedTypeTypes.Count}");
             Console.WriteLine($"[usedBySelf]-------{usedBySelfTypes.Count}---------");
             foreach (var type in usedBySelfTypes)
@@ -153,16 +146,15 @@ namespace CodeCleanerCLI
             {
                 Console.WriteLine($"[notUsed]{type.Name}");
             }
-            Console.WriteLine("finish");
+            Console.WriteLine("analysis finish.");
+            
+            Console.WriteLine("input 'rm' to exec remove action, otherwise quit.");
+            var input = Console.ReadLine();
+            if (!input.StartsWith("rm")) return;
 
-            var fixTypeName = "NotUsedFixedType";
-            var fixType = notUsedTypes.FirstOrDefault(t => t.Name == fixTypeName) as INamedTypeSymbol;
-            if (fixType != null)
-            {
-                solution = await fixType.RemoveSymbolAsync(solution);
-                var ret = workspace.TryApplyChanges(solution);
-                Console.WriteLine($"remove {fixType} and save changes, result: {ret}");
-            }
+            solution = await solution.RemoveSymbolsAsync(notUsedTypes.Concat(usedBySelfTypes).Concat(usedByNotUsedTypeTypes));
+            var ret = workspace.TryApplyChanges(solution);
+            Console.WriteLine($"save changes, result: {ret}");
             
             Console.ReadKey();
         }
@@ -170,59 +162,6 @@ namespace CodeCleanerCLI
         private static void Workspace_WorkspaceFailed(object sender, WorkspaceDiagnosticEventArgs e)
         {
             Console.WriteLine($"[error]{e.Diagnostic.Message}");
-        }
-
-        private static async IAsyncEnumerable<INamedTypeSymbol> GetAllNamedType(Solution solution)
-        {
-            foreach (Document d in solution.Projects.SelectMany(p => p.Documents))
-            {
-                SemanticModel m = await d.GetSemanticModelAsync();
-                var syntaxRoot = await d.GetSyntaxRootAsync();
-                var nodes = syntaxRoot.DescendantNodes().ToArray();
-                foreach (var c in nodes.OfType<TypeDeclarationSyntax>())
-                {
-                    yield return m.GetDeclaredSymbol(c) as INamedTypeSymbol;
-                }
-            }
-        }
-
-        private static async IAsyncEnumerable<INamedTypeSymbol> GetAllNamedType2(Solution solution)
-        {
-            foreach (Project p in solution.Projects)
-            {
-                var compilation = await p.GetCompilationAsync();
-
-                //foreach (var @class in compilation.GlobalNamespace.GetNamespaceMembers().SelectMany(x => x.GetMembers()))
-                //{
-                //    Console.WriteLine(@class.Name);
-                //    Console.WriteLine(@class.ContainingNamespace.Name);
-                //}
-
-                var classVisitor = new ClassVirtualizationVisitor();
-
-                foreach (var syntaxTree in compilation.SyntaxTrees)
-                {
-                    var node = classVisitor.Visit(syntaxTree.GetRoot());
-                    yield return compilation.GetSemanticModel(syntaxTree).GetDeclaredSymbol(node) as INamedTypeSymbol;
-                }
-            }
-        }
-
-        class ClassVirtualizationVisitor : CSharpSyntaxRewriter
-        {
-            public ClassVirtualizationVisitor()
-            {
-                //Classes = new List<ClassDeclarationSyntax>();
-            }
-
-            //public List<ClassDeclarationSyntax> Classes { get; set; }
-
-            public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
-            {
-                node = (ClassDeclarationSyntax)base.VisitClassDeclaration(node);
-                //Classes.Add(node); // save your visited classes
-                return node;
-            }
         }
 
         enum UsageType
@@ -235,6 +174,20 @@ namespace CodeCleanerCLI
 
     static class RoslynExtensions
     {
+        public static async IAsyncEnumerable<INamedTypeSymbol> GetAllNamedType(this Solution solution)
+        {
+            foreach (Document d in solution.Projects.SelectMany(p => p.Documents))
+            {
+                SemanticModel m = await d.GetSemanticModelAsync();
+                var syntaxRoot = await d.GetSyntaxRootAsync();
+                var nodes = syntaxRoot.DescendantNodes().ToArray();
+                foreach (var c in nodes.OfType<TypeDeclarationSyntax>())
+                {
+                    yield return m.GetDeclaredSymbol(c);
+                }
+            }
+        }
+        
         public static bool IsInDefinition(this ReferenceLocation location, ISymbol symbol)
         {
             return symbol.DeclaringSyntaxReferences.Any(d => d.Span.Contains(location.Location.SourceSpan) && location.Document.FilePath == d.SyntaxTree.FilePath);
@@ -246,16 +199,36 @@ namespace CodeCleanerCLI
             return s.ContainingType;
         }
 
-        public static async Task<Solution> RemoveSymbolAsync(this ISymbol s, Solution solution)
+        //not working when invoked with multiple cached symbols
+        public static async Task<Solution> RemoveSymbolAsync(this Solution solution, ISymbol s)
         {
             foreach (var declare in s.DeclaringSyntaxReferences)
             {
                 var node = await declare.GetSyntaxAsync();
                 if (!node.GetLocation().IsInSource) continue;
-                var doc = solution.GetDocument(node.SyntaxTree);
+                var docId = solution.GetDocumentId(node.SyntaxTree);
+                if (docId == null) //maybe deleted before (subtype who's parent has been removed?)
+                {
+                    continue;
+                }
                 var root = await node.SyntaxTree.GetRootAsync();
                 var newRoot = root.RemoveNode(node, SyntaxRemoveOptions.KeepNoTrivia);
-                solution = doc!.WithSyntaxRoot(newRoot).Project.Solution;
+                solution = solution.WithDocumentSyntaxRoot(docId, newRoot);
+            }
+
+            return solution;
+        }
+
+        public static async Task<Solution> RemoveSymbolsAsync(this Solution solution, IEnumerable<ISymbol> s)
+        {
+            var symbolGroups = s.SelectMany(s => s.DeclaringSyntaxReferences)
+                .Select(d => d.GetSyntax())
+                .GroupBy(node => solution.GetDocumentId(node.SyntaxTree)).ToArray();
+            foreach (var symbolsPerDoc in symbolGroups)
+            {
+                var root = await symbolsPerDoc.First().SyntaxTree.GetRootAsync();
+                root = root.RemoveNodes(symbolsPerDoc, SyntaxRemoveOptions.KeepNoTrivia);
+                solution = solution.WithDocumentSyntaxRoot(symbolsPerDoc.Key, root);
             }
 
             return solution;
