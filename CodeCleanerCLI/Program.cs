@@ -17,8 +17,8 @@ namespace CodeCleanerCLI
         static async Task Main(string[] args)
         {
             //var solutionFile = args[0];
-            //var targetFile = @"D:\Projects\2020\CodeCleaner\DemoProject\ConsoleApp\ConsoleApp.sln";
-            var targetFile = @"D:\Projects\doggy\doggy.csproj";
+            var targetFile = @"..\DemoProject\ConsoleApp\ConsoleApp.sln";
+            //var targetFile = @"D:\Projects\doggy\doggy.csproj";
             bool isSolution = targetFile.EndsWith(".sln");
             Console.WriteLine($"target[{(isSolution ? "solution" : "project")}]: {targetFile}");
 
@@ -154,6 +154,16 @@ namespace CodeCleanerCLI
                 Console.WriteLine($"[notUsed]{type.Name}");
             }
             Console.WriteLine("finish");
+
+            var fixTypeName = "NotUsedFixedType";
+            var fixType = notUsedTypes.FirstOrDefault(t => t.Name == fixTypeName) as INamedTypeSymbol;
+            if (fixType != null)
+            {
+                solution = await fixType.RemoveSymbolAsync(solution);
+                var ret = workspace.TryApplyChanges(solution);
+                Console.WriteLine($"remove {fixType} and save changes, result: {ret}");
+            }
+            
             Console.ReadKey();
         }
 
@@ -234,6 +244,21 @@ namespace CodeCleanerCLI
         {
             if (s is INamedTypeSymbol its) return its;
             return s.ContainingType;
+        }
+
+        public static async Task<Solution> RemoveSymbolAsync(this ISymbol s, Solution solution)
+        {
+            foreach (var declare in s.DeclaringSyntaxReferences)
+            {
+                var node = await declare.GetSyntaxAsync();
+                if (!node.GetLocation().IsInSource) continue;
+                var doc = solution.GetDocument(node.SyntaxTree);
+                var root = await node.SyntaxTree.GetRootAsync();
+                var newRoot = root.RemoveNode(node, SyntaxRemoveOptions.KeepNoTrivia);
+                solution = doc!.WithSyntaxRoot(newRoot).Project.Solution;
+            }
+
+            return solution;
         }
     }
 }

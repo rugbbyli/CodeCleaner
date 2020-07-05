@@ -10,6 +10,13 @@ namespace ConsoleApp
         }
     }
 
+    class NotUsedFixedType : NotUsedFixedType2 {
+        int i = 1;
+        int j = 2;
+    }
+
+    class NotUsedFixedType2{}
+
     class NotUsedBase { }
     class NotUsedInherit : NotUsedBase { }
 
