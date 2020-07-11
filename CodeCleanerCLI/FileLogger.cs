@@ -10,7 +10,7 @@ namespace CodeCleanerCLI
         public FileLogger(string path)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
-            _textWriter = new StreamWriter(File.OpenWrite(path));
+            _textWriter = File.CreateText(path);
         }
 
         public void WriteLine(string content)
@@ -23,7 +23,8 @@ namespace CodeCleanerCLI
         public void Dispose()
         {
             _textWriter.Flush();
-            _textWriter?.Dispose();
+            _textWriter.Close();
+            _textWriter.Dispose();
         }
     }
 }
