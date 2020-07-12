@@ -40,24 +40,19 @@ namespace CodeCleanerCLI
             };
         }
 
-        private static IEnumerable<string> RemoveUnityEditorSymbols(IEnumerable<string> symbols)
-        {
-            return symbols.Where(s => !s.StartsWith("UNITY_EDITOR"));
-        }
-        
         static async Task Main(string[] args)
         {
             //var solutionFile = args[0];
-            //var targetFile = @"D:\Projects\doggy\doggy.csproj";
-            // Console.WriteLine("input project or solution file path:");
-            // var targetFile = Console.ReadLine();
             var logFile = "Logs/CodeCleanerCLI.log";
             _logger = new FileLogger(logFile) {WriteToConsole = true};
             
             // var solutionFile = @"..\..\..\..\DemoProject\ConsoleApp\ConsoleApp.sln";
             // var projectNames = new string[0];
             var solutionFile = "/Volumes/hjdclient.3d/hjdclient.3d/integrated.sln";
-            var projectNames = new[] {"Assembly-CSharp", "Assembly-CSharp-firstpass"};
+            var projectNames = new[] {
+                "Assembly-CSharp", 
+                //"Assembly-CSharp-firstpass"
+            };
             _logger.WriteLine($"solution: {solutionFile}");
 
             MSBuildLocator.RegisterDefaults();
@@ -149,7 +144,6 @@ namespace CodeCleanerCLI
                     var results = await Task.WhenAll(taskGroup.Values);
                     foreach (var result in results)
                     {
-                        if(result.Type.Name == "AndroidNotificationService") Debugger.Break();
                         if (typeRefs.TryGetValue(result.Type, out var refs))
                         {
                             refs.AddRange(result.Result);
@@ -214,7 +208,7 @@ namespace CodeCleanerCLI
             {
                 foreach (INamedTypeSymbol type in notUsedTypes)
                 {
-                    //if(type.Name == "DataCenterExtension") Debugger.Break();
+                    if (type.EnumUnderlyingType != null) continue;
                     //todo: not very safe, GetMembers may missing some members as it was created in one platform
                     var methods = type.GetMembers().Where(m => m is IMethodSymbol).Cast<IMethodSymbol>();
                     foreach(var m in methods)
@@ -283,7 +277,6 @@ namespace CodeCleanerCLI
             {
                 _logger.WriteLine($"[notUsed]{type.Name}");
             }
-            _logger.WriteLine("analysis finish.");
             
             solution = await solution.RemoveSymbolsDefinitionAsync(notUsedTypes.Concat(usedBySelfTypes)
                 .Concat(usedByNotUsedTypeTypes));
@@ -318,7 +311,6 @@ namespace CodeCleanerCLI
                     var np = project.WithParseOptions(project.OptionWithChangeSymbols(platform.add, platform.rm));
                     foreach (var document in np.Documents)
                     {
-                        if (document.Name == "AndroidImpl") Debugger.Break();
                         if (!documentFilter(document)) continue;
                         if (retainDocs.Contains(document)) continue;
                 
@@ -462,20 +454,6 @@ namespace CodeCleanerCLI
 
     static class RoslynExtensions
     {
-        public static async IAsyncEnumerable<INamedTypeSymbol> GetAllNamedType(this Solution solution)
-        {
-            foreach (Document d in solution.Projects.SelectMany(p => p.Documents))
-            {
-                SemanticModel m = await d.GetSemanticModelAsync();
-                var syntaxRoot = await d.GetSyntaxRootAsync();
-                var nodes = syntaxRoot.DescendantNodes().ToArray();
-                foreach (var c in nodes.OfType<TypeDeclarationSyntax>())
-                {
-                    yield return m.GetDeclaredSymbol(c);
-                }
-            }
-        }
-
         public static async IAsyncEnumerable<INamespaceSymbol> GetNamespaceDefinition(this Document document, SyntaxNode syntaxRoot)
         {
             SemanticModel m = await document.GetSemanticModelAsync();
@@ -494,7 +472,7 @@ namespace CodeCleanerCLI
                 SemanticModel m = await d.GetSemanticModelAsync();
                 var syntaxRoot = await d.GetSyntaxRootAsync();
                 var nodes = syntaxRoot.DescendantNodes().ToArray();
-                foreach (var c in nodes.OfType<TypeDeclarationSyntax>())
+                foreach (var c in nodes.OfType<BaseTypeDeclarationSyntax>())
                 {
                     yield return m.GetDeclaredSymbol(c);
                 }
@@ -510,30 +488,6 @@ namespace CodeCleanerCLI
         {
             if (s is INamedTypeSymbol its) return its;
             return s.ContainingType;
-        }
-
-        //not working when invoked with multiple cached symbols
-        public static async Task<Solution> RemoveSymbolAsync(this Solution solution, ISymbol s)
-        {
-            foreach (var declare in s.DeclaringSyntaxReferences)
-            {
-                var node = await declare.GetSyntaxAsync();
-                if (!node.GetLocation().IsInSource) continue;
-                var docId = solution.GetDocumentId(node.SyntaxTree);
-                if (docId == null) //maybe deleted before (subtype who's parent has been removed?)
-                {
-                    continue;
-                }
-                var root = await node.SyntaxTree.GetRootAsync();
-                var newRoot = root.RemoveNode(node, SyntaxRemoveOptions.KeepUnbalancedDirectives);
-                if (!newRoot.DescendantNodes().Any(n => n is TypeDeclarationSyntax))
-                {
-                    Debugger.Break();
-                }
-                solution = solution.WithDocumentSyntaxRoot(docId, newRoot);
-            }
-
-            return solution;
         }
 
         public static async Task<Solution> RemoveSymbolsDefinitionAsync(this Solution solution, IEnumerable<ISymbol> s)
