@@ -1,4 +1,4 @@
-﻿using Microsoft.Build.Locator;
+using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -32,10 +32,10 @@ namespace CodeCleanerCLI
         private static IEnumerable<(string[] add, string[] rm)> EnumUnityPlatformSymbols()
         {
             return new[] {
-                (unityAndroidSymbols, unityEditorSymbols), 
-                (unityWinSymbols, unityEditorSymbols), 
-                (unityiOSSymbols, unityEditorSymbols), 
-                (unityMacSymbols, unityEditorSymbols), 
+                (unityAndroidSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityiOSSymbols).Concat(unityMacSymbols).ToArray()), 
+                (unityWinSymbols, unityEditorSymbols.Concat(unityAndroidSymbols).Concat(unityiOSSymbols).Concat(unityMacSymbols).ToArray()), 
+                (unityiOSSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityAndroidSymbols).Concat(unityMacSymbols).ToArray()), 
+                (unityMacSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityiOSSymbols).Concat(unityAndroidSymbols).ToArray()), 
                 (unityEditorSymbols, new string[0])
             };
         }
