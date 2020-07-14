@@ -77,23 +77,34 @@ namespace CodeCleanerCLI
             }
 
             var allPlatformSymbols = EnumUnityPlatformSymbols();
-            
-            Console.WriteLine("scan and remove not used type definition? (Y/N)");
-            if (InputContinue())
+
+            var yesNoAnalyzerOnly = new[] { "y", "n", "a" };
+            var choice = CaptureInput("scan and remove not used type definition, or analysis only ?", yesNoAnalyzerOnly);
+            if (choice == 0 || choice == 2)
             {
                 _logger.WriteLine($"==================remove not used type=====================");
-                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc);
-                var ret = workspace.TryApplyChanges(solution);
-                _logger.WriteLine($"finish and save changes, result: {ret}");
+                var newSolution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc);
+                if (choice == 0)
+                {
+                    solution = newSolution;
+                    var ret = workspace.TryApplyChanges(solution);
+                    _logger.WriteLine($"finish and save changes, result: {ret}");
+                }
             }
 
             Console.WriteLine("scan and remove files without type definition? (Y/N)");
-            if (InputContinue())
+            choice = CaptureInput("scan and remove files without type definition, or analysis only ?", yesNoAnalyzerOnly);
+            if (choice == 0 || choice == 2)
             {
                 _logger.WriteLine($"==================remove not used files=====================");
-                solution = await CheckFilesAndRemove(solution, projects, allPlatformSymbols, FilterDoc);
-                var ret = workspace.TryApplyChanges(solution);
-                _logger.WriteLine($"finish and save changes, result: {ret}");}
+                var newSolution = await CheckFilesAndRemove(solution, projects, allPlatformSymbols, FilterDoc);
+                if (choice == 0)
+                {
+                    solution = newSolution;
+                    var ret = workspace.TryApplyChanges(solution);
+                    _logger.WriteLine($"finish and save changes, result: {ret}");
+                }
+            }
             
             _logger.Dispose();
             Console.ReadKey();
@@ -383,10 +394,11 @@ namespace CodeCleanerCLI
             return solution;
         }
 
-        private static bool InputContinue()
+        private static int CaptureInput(string title, string[] options)
         {
-            var input = Console.ReadLine();
-            return input == "Y" || input == "y";
+            Console.WriteLine($"{title} ({string.Join('/', options)})");
+            var input = Console.ReadLine().ToLower();
+            return Array.IndexOf(options, input);
         }
 
         private static void Workspace_WorkspaceFailed(object sender, WorkspaceDiagnosticEventArgs e)
