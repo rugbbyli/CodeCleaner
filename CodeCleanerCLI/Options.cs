@@ -65,6 +65,7 @@ namespace CodeCleanerCLI
         {
             RemoveUnusedType,
             RemoveUnusedFile,
+            RemoveUnusedMethod,
         }
     }
 }
