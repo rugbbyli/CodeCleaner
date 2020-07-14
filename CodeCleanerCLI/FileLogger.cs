@@ -3,7 +3,11 @@ using System.IO;
 
 namespace CodeCleanerCLI
 {
-    public class FileLogger : IDisposable
+    interface ILogger
+    {
+        void WriteLine(string content);
+    }
+    public class FileLogger : IDisposable, ILogger
     {
         private TextWriter _textWriter;
         public bool WriteToConsole { get; set; }
@@ -26,5 +30,10 @@ namespace CodeCleanerCLI
             _textWriter.Close();
             _textWriter.Dispose();
         }
+    }
+
+    public class ConsoleLogger : ILogger
+    {
+        public void WriteLine(string content) => Console.WriteLine(content);
     }
 }

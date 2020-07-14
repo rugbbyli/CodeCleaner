@@ -1,4 +1,4 @@
-using Microsoft.Build.Locator;
+﻿using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -10,107 +10,93 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using CommandLine;
+using CommandLine.Text;
 
 namespace CodeCleanerCLI
 {
     static class Program
     {
-        private static FileLogger _logger;
+        private static ILogger _logger;
         
-        private static readonly string[] unityWinSymbols = { "UNITY_STANDALONE", "UNITY_STANDALONE_WIN" };
-        private static readonly string[] unityAndroidSymbols = { "UNITY_ANDROID" };
-        private static readonly string[] unityiOSSymbols = { "UNITY_IPHONE", "UNITY_IOS" };
-        private static readonly string[] unityMacSymbols = { "UNITY_STANDALONE", "UNITY_STANDALONE_OSX" };
-        private static readonly string[] unityEditorSymbols = { "UNITY_EDITOR", "UNITY_EDITOR_64", "UNITY_EDITOR_WIN", "UNITY_EDITOR_OSX", "UNITY_EDITOR_LINUX" };
-
-        private static readonly string[] ignorePaths =
-        {
-            $"Assets{Path.DirectorySeparatorChar}Components3rd{Path.DirectorySeparatorChar}",
-            $"Assets{Path.DirectorySeparatorChar}Standard Assets{Path.DirectorySeparatorChar}",
-        };
-
-        private static IEnumerable<(string[] add, string[] rm)> EnumUnityPlatformSymbols()
-        {
-            return new[] {
-                (unityAndroidSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityiOSSymbols).Concat(unityMacSymbols).ToArray()), 
-                (unityWinSymbols, unityEditorSymbols.Concat(unityAndroidSymbols).Concat(unityiOSSymbols).Concat(unityMacSymbols).ToArray()), 
-                (unityiOSSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityAndroidSymbols).Concat(unityMacSymbols).ToArray()), 
-                (unityMacSymbols, unityEditorSymbols.Concat(unityWinSymbols).Concat(unityiOSSymbols).Concat(unityAndroidSymbols).ToArray()), 
-                (unityEditorSymbols, new string[0])
-            };
-        }
-
         static async Task Main(string[] args)
         {
-            //var solutionFile = args[0];
-            var logFile = "Logs/CodeCleanerCLI.log";
-            _logger = new FileLogger(logFile) {WriteToConsole = true};
+#if DEBUG
+            var option = UnityProfile.BuildOption();
+            option.Action = Options.ActionType.RemoveUnusedType;
+            option.DryRun = true;
+            _logger = new FileLogger(Path.Combine(Environment.CurrentDirectory, $"{option.Action.ToString()}-{DateTime.Now}.log")){WriteToConsole = true};
+
+            await Work(option);
+#else
+            _logger = new ConsoleLogger();
             
-            // var solutionFile = @"..\..\..\..\DemoProject\ConsoleApp\ConsoleApp.sln";
-            // var projectNames = new string[0];
-            var solutionFile = "/Volumes/hjdclient.3d/hjdclient.3d/integrated.sln";
-            var projectNames = new[] {
-                "Assembly-CSharp", 
-                //"Assembly-CSharp-firstpass"
-            };
-            _logger.WriteLine($"solution: {solutionFile}");
+            var parserResult = Parser.Default.ParseArguments<Options>(args);
+
+            parserResult.WithNotParsed(errs => DisplayHelp(parserResult, errs));
+            //parserResult.WithParsed(o => _logger.WriteLine(JsonConvert.SerializeObject(o)));
+            
+            await parserResult.WithParsedAsync(Work);
+#endif
+        }
+        
+        static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
+        {
+            HelpText helpText = null;
+            helpText = HelpText.AutoBuild(result, h =>
+            {
+                h.AddEnumValuesToHelpText = true;
+                return HelpText.DefaultParsingErrorsHandler(result, h);
+            }, e => e);
+            _logger.WriteLine(helpText);
+        }
+        
+        static async Task Work(Options options)
+        {
+            _logger.WriteLine($"solution: {options.SolutionPath}");
 
             MSBuildLocator.RegisterDefaults();
             using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
             workspace.WorkspaceFailed += Workspace_WorkspaceFailed;
 
             List<Project> projects = new List<Project>();
-            Solution solution = await workspace.OpenSolutionAsync(solutionFile);
-            if (projectNames.Any())
+            Solution solution = await workspace.OpenSolutionAsync(options.SolutionPath);
+            if (options.ProjectNames.Any())
             {
-                projects.AddRange(projectNames.Select(name => solution.Projects.FirstOrDefault(p => p.Name == name)).Where(p => p != null).Distinct());
+                projects.AddRange(options.ProjectNames.Select(name => solution.Projects.FirstOrDefault(p => p.Name == name)).Where(p => p != null).Distinct());
             }
             else
             {
                 projects.AddRange(solution.Projects);
             }
-
-            var solutionFolder = Path.GetDirectoryName(Path.GetFullPath(solutionFile));
+            
+            var solutionFolder = Path.GetDirectoryName(Path.GetFullPath(options.SolutionPath));
             bool FilterDoc(Document doc)
             {
-                return doc.FilePath!.StartsWith(solutionFolder!) && !ignorePaths.Any(path => doc.FilePath!.Contains(path));
+                return doc.FilePath!.StartsWith(solutionFolder!) && !options.IgnorePaths.Any(path => doc.FilePath!.Contains(path));
             }
 
-            var allPlatformSymbols = EnumUnityPlatformSymbols();
+            var allPlatformSymbols = options.DefineList.Select(d => (d.Add, d.Remove)).ToArray();
 
-            var yesNoAnalyzerOnly = new[] { "y", "n", "a" };
-            var choice = CaptureInput("scan and remove not used type definition, or analysis only ?", yesNoAnalyzerOnly);
-            if (choice == 0 || choice == 2)
+            if(options.Action == Options.ActionType.RemoveUnusedType)
             {
                 _logger.WriteLine($"==================remove not used type=====================");
-                var newSolution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc);
-                if (choice == 0)
-                {
-                    solution = newSolution;
-                    var ret = workspace.TryApplyChanges(solution);
-                    _logger.WriteLine($"finish and save changes, result: {ret}");
-                }
+                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc, options.IgnoreBaseTypes);
             }
-
-            Console.WriteLine("scan and remove files without type definition? (Y/N)");
-            choice = CaptureInput("scan and remove files without type definition, or analysis only ?", yesNoAnalyzerOnly);
-            if (choice == 0 || choice == 2)
+            else if(options.Action == Options.ActionType.RemoveUnusedFile)
             {
                 _logger.WriteLine($"==================remove not used files=====================");
-                var newSolution = await CheckFilesAndRemove(solution, projects, allPlatformSymbols, FilterDoc);
-                if (choice == 0)
-                {
-                    solution = newSolution;
-                    var ret = workspace.TryApplyChanges(solution);
-                    _logger.WriteLine($"finish and save changes, result: {ret}");
-                }
+                solution = await CheckFilesAndRemove(solution, projects, allPlatformSymbols, FilterDoc);
             }
-            
-            _logger.Dispose();
-            Console.ReadKey();
+            if (options.DryRun == false)
+            {
+                var ret = workspace.TryApplyChanges(solution);
+                _logger.WriteLine($"finish and save changes, result: {ret}");
+            }
+            (_logger as IDisposable)?.Dispose();
         }
 
-        private static async Task<Solution> RemoveUnUsedTypes(Solution solution, IEnumerable<Project> projects, IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter)
+        private static async Task<Solution> RemoveUnUsedTypes(Solution solution, IEnumerable<Project> projects, IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter, IEnumerable<string> ignoreBaseTypes)
         {
             var comparer = new TypeSymbolEqualityComparer();
             
@@ -121,9 +107,6 @@ namespace CodeCleanerCLI
             HashSet<ISymbol> specialTypes = new HashSet<ISymbol>(comparer);
 
             Dictionary<ISymbol, List<ReferencedSymbol>> typeRefs = new Dictionary<ISymbol, List<ReferencedSymbol>>(comparer);
-
-            //var unityTypes = new[] {"ScriptableObject", "MonoBehaviour", "Graphic", "BaseMeshEffect" };
-            var unityTypes = new[] { "UnityEngine.Object" };
 
             var platformSolutions = platforms.Select(p => (p, solution.WithChangeSymbols(p.add, p.rm))).ToArray();
 
@@ -139,9 +122,9 @@ namespace CodeCleanerCLI
                     await foreach(var type in np.GetAllNamedType(documentFilter))
                     {
                         //if (typeRefs.ContainsKey(type)) continue;
-                    
+                        
                         //预处理： 特殊标记类型直接进入usedType，不再搜索引用
-                        if (type.IsInheritFromAny(unityTypes))
+                        if (type.IsInheritFromAny(ignoreBaseTypes))
                         {
                             //_logger.WriteLine($"{type.Name}: special.");
                             specialTypes.Add(type);
@@ -155,6 +138,7 @@ namespace CodeCleanerCLI
                     var results = await Task.WhenAll(taskGroup.Values);
                     foreach (var result in results)
                     {
+                        if(result.Type.IsGenericType && result.Type.Name.Contains("RoomPlayersModel")) Debugger.Break();
                         if (typeRefs.TryGetValue(result.Type, out var refs))
                         {
                             refs.AddRange(result.Result);
@@ -394,13 +378,6 @@ namespace CodeCleanerCLI
             return solution;
         }
 
-        private static int CaptureInput(string title, string[] options)
-        {
-            Console.WriteLine($"{title} ({string.Join('/', options)})");
-            var input = Console.ReadLine().ToLower();
-            return Array.IndexOf(options, input);
-        }
-
         private static void Workspace_WorkspaceFailed(object sender, WorkspaceDiagnosticEventArgs e)
         {
             _logger.WriteLine($"[error]{e.Diagnostic.Message}");
@@ -524,7 +501,7 @@ namespace CodeCleanerCLI
             return symbol.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
         }
 
-        public static bool IsInheritFromAny(this INamedTypeSymbol symbol, string[] baseTypeNames)
+        public static bool IsInheritFromAny(this INamedTypeSymbol symbol, IEnumerable<string> baseTypeNames)
         {
             while (symbol.BaseType != null)
             {
