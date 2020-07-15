@@ -1,4 +1,4 @@
-﻿using Microsoft.Build.Locator;
+using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -76,12 +76,18 @@ namespace CodeCleanerCLI
                 return doc.FilePath!.StartsWith(solutionFolder!) && !options.IgnorePaths.Any(path => doc.FilePath!.Contains(path));
             }
 
+            bool FilterType(ITypeSymbol symbol)
+            {
+                return !symbol.IsInheritFromAny(options.IgnoreBaseTypes);
+                //return true;
+            }
+
             var allPlatformSymbols = options.DefineList.Select(d => (d.Add, d.Remove)).ToArray();
 
             _logger.WriteLine($"--------------------> running {options.Action}");
             if(options.Action == Options.ActionType.RemoveUnusedType)
             {
-                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc, options.IgnoreBaseTypes);
+                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc, FilterType);
             }
             else if(options.Action == Options.ActionType.RemoveUnusedFile)
             {
@@ -89,8 +95,7 @@ namespace CodeCleanerCLI
             }
             else if (options.Action == Options.ActionType.RemoveUnusedMethod)
             {
-                solution = await RemoveUnUsedMethods(solution, projects, allPlatformSymbols, FilterDoc,
-                    options.IgnoreBaseTypes);
+                solution = await RemoveUnUsedMethods(solution, projects, allPlatformSymbols, FilterDoc, FilterType);
             }
             if (options.DryRun == false)
             {
@@ -102,7 +107,7 @@ namespace CodeCleanerCLI
 
         private static async Task<Solution> RemoveUnUsedMethods(Solution solution, IEnumerable<Project> projects,
             IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter,
-            IEnumerable<string> ignoreBaseTypes)
+            Func<ITypeSymbol, bool> typeFilter)
         {
             var memberComparer = new MemberSymbolEqualityComparer();
             var typeComparer = new TypeSymbolEqualityComparer();
@@ -125,7 +130,8 @@ namespace CodeCleanerCLI
                     await foreach(var type in np.GetAllNamedType(documentFilter))
                     {
                         //预处理： 特殊标记类型直接进入usedType，不再搜索引用
-                        if (type.IsInheritFromAny(ignoreBaseTypes))
+                        //if (type.IsInheritFromAny(ignoreBaseTypes))
+                        if(!typeFilter(type))
                         {
                             continue;
                         }
@@ -194,7 +200,43 @@ namespace CodeCleanerCLI
             return solution;
         }
 
-        private static async Task<Solution> RemoveUnUsedTypes(Solution solution, IEnumerable<Project> projects, IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter, IEnumerable<string> ignoreBaseTypes)
+        /// <summary>
+        /// 针对ModelingView： 查找Model是否被引用。
+        /// </summary>
+        /// <param name="notUsedTypes"></param>
+        /// <param name="typeRefs"></param>
+        /// <returns></returns>
+        private static HashSet<ISymbol> ModelingViewAnalysis(in IEnumerable<ISymbol> notUsedTypes, in HashSet<ISymbol> usedTypes)
+        {
+            _logger.WriteLine("analysis modeling view types --->");
+            var modelingViewTypes = new[] { "Components.ModelingView" };
+            HashSet<ISymbol> result = new HashSet<ISymbol>(usedTypes.Comparer);
+
+            foreach (INamedTypeSymbol type in notUsedTypes)
+            {
+                if (!type.IsInheritFromAny(modelingViewTypes))
+                {
+                    continue;
+                }
+
+                if (!type.BaseType.IsGenericType)
+                {
+                    _logger.WriteLine($"[error] inherit from modeling view, but not generic type: {type.ToDisplayString()}");
+                    result.Add(type);
+                    continue;
+                }
+
+                if (type.BaseType.TypeArguments.Any(usedTypes.Contains))
+                {
+                    result.Add(type);
+                }
+            }
+            _logger.WriteLine($"analysis finish, ratio (used/notUsed): {result.Count}/{notUsedTypes.Count()}");
+
+            return result;
+        }
+        
+        private static async Task<Solution> RemoveUnUsedTypes(Solution solution, IEnumerable<Project> projects, IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter, Func<ITypeSymbol, bool> typeFilter)
         {
             var comparer = new TypeSymbolEqualityComparer();
             
@@ -222,7 +264,7 @@ namespace CodeCleanerCLI
                         //if (typeRefs.ContainsKey(type)) continue;
                         
                         //预处理： 特殊标记类型直接进入usedType，不再搜索引用
-                        if (type.IsInheritFromAny(ignoreBaseTypes))
+                        if (!typeFilter(type))
                         {
                             //_logger.WriteLine($"{type.Name}: special.");
                             specialTypes.Add(type);
@@ -278,6 +320,8 @@ namespace CodeCleanerCLI
                 foreach (INamedTypeSymbol type in notUsedTypes)
                 {
                     if (type.EnumUnderlyingType != null) continue;
+                    if (specialTypes.Contains(type)) continue;
+                    
                     //todo: not very safe, GetMembers may missing some members as it was created in one platform
                     var methods = type.GetMembers().Where(m => m is IMethodSymbol).Cast<IMethodSymbol>();
                     foreach(var m in methods)
@@ -318,7 +362,7 @@ namespace CodeCleanerCLI
                 var usages = refs.SelectMany(r => r.Locations.Select(l =>
                 {
                     if (l.IsInDefinition(type)) return UsageType.UsedBySelf;
-                    if (notUsedTypes.Any(t => l.IsInDefinition(t))) return UsageType.UsedBySomeoneWhoWasNotUsed;
+                    if (notUsedTypes.Concat(usedBySelfTypes).Any(t => l.IsInDefinition(t))) return UsageType.UsedBySomeoneWhoWasNotUsed;
                     return UsageType.Used;
                 }));
                 if(usages.All(usage => usage == UsageType.UsedBySelf || usage == UsageType.UsedBySomeoneWhoWasNotUsed))
@@ -328,24 +372,30 @@ namespace CodeCleanerCLI
 
             }
             usedTypes.ExceptWith(usedByNotUsedTypeTypes);
+
+            // var mv = ModelingViewAnalysis(notUsedTypes.Concat(usedBySelfTypes).Concat(usedByNotUsedTypeTypes).ToArray(), usedTypes);
+            // notUsedTypes.ExceptWith(mv);
+            
             _logger.WriteLine($"analysis finish at {DateTime.Now}");
             
             _logger.WriteLine($"[notUsedTotal]{notUsedTypes.Count + usedBySelfTypes.Count + usedByNotUsedTypeTypes.Count}");
             _logger.WriteLine($"[usedBySelf]-------{usedBySelfTypes.Count}---------");
             foreach (var type in usedBySelfTypes)
             {
-                _logger.WriteLine($"[usedBySelf]{type.Name}");
+                _logger.WriteLine($"[usedBySelf]{type.ToDisplayString()}");
             }
             _logger.WriteLine($"[usedByNotUsed]-------{usedByNotUsedTypeTypes.Count}---------");
             foreach (var type in usedByNotUsedTypeTypes)
             {
-                _logger.WriteLine($"[usedByNotUsed]{type.Name}");
+                _logger.WriteLine($"[usedByNotUsed]{type.ToDisplayString()}");
             }
             _logger.WriteLine($"[notUsed]-------{notUsedTypes.Count}---------");
             foreach (var type in notUsedTypes)
             {
-                _logger.WriteLine($"[notUsed]{type.Name}");
+                _logger.WriteLine($"[notUsed]{type.ToDisplayString()}");
             }
+            
+            
             
             solution = await solution.RemoveSymbolsDefinitionAsync(notUsedTypes.Concat(usedBySelfTypes)
                 .Concat(usedByNotUsedTypeTypes));
@@ -585,7 +635,7 @@ namespace CodeCleanerCLI
             return symbol.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
         }
 
-        public static bool IsInheritFromAny(this INamedTypeSymbol symbol, IEnumerable<string> baseTypeNames)
+        public static bool IsInheritFromAny(this ITypeSymbol symbol, IEnumerable<string> baseTypeNames)
         {
             while (symbol.BaseType != null)
             {
