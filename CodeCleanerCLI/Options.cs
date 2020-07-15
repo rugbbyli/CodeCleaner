@@ -7,19 +7,19 @@ namespace CodeCleanerCLI
 {
     public class Options
     {
-        [Option("solution", Required = true, HelpText = "Input .sln file path.")]
+        [Option('s', "solution", Required = true, HelpText = "solution (.sln) file path.")]
         public string SolutionPath { get; set; }
         
 
-        [Option('a', "action", Required = true)]
+        [Option('a', "action", Required = true, HelpText = "action to do.")]
         public ActionType Action { get; set; }
         
-        [Option("ignore-path", Required = false)]
+        [Option("ignore-path", Required = false, HelpText = "paths where documents under them would be ignore.")]
         public IEnumerable<string> IgnorePaths { get; set; }
-        [Option("ignore-type-base", Required = false)]
+        [Option("ignore-type-base", Required = false, HelpText = "base types who inherited from would be ignore.")]
         public IEnumerable<string> IgnoreBaseTypes { get; set; }
 
-        [Option("project", Required = false, HelpText = "Input project name to only work on specific projects.")]
+        [Option('p', "project", Required = false, HelpText = "project name to work on, or empty to work on all projects.")]
         public IEnumerable<string> ProjectNames { get; set; }
         [Option("define", Required = false, HelpText = "define preprocessor symbols, format: +A+B-C-D, means add symbol A and B, remove symbol C and D.")]
         public IEnumerable<string> _rawDefineList { get; set; }
