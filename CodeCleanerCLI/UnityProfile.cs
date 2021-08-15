@@ -47,23 +47,25 @@ namespace CodeCleanerCLI
                 ProjectNames = ProjectNames,
                 IgnorePaths = ignorePaths,
                 IgnoreBaseTypes = IgnoreBaseTypes,
-                _rawDefineList = EnumUnityPlatformSymbols().Select(item =>
-                {
-                    StringBuilder sb = new StringBuilder();
-                    if (item.add.Length > 0)
-                    {
-                        sb.Append('+');
-                        sb.AppendJoin('+', item.add);
-                    }
-                    if (item.rm.Length > 0)
-                    {
-                        sb.Append('-');
-                        sb.AppendJoin('-', item.rm);
-                    }
-
-                    return sb.ToString();
-                }),
+                _rawDefineList = EnumUnityPlatformSymbols().Select(FormatSymbolDefine),
             };
+        }
+
+        public static string FormatSymbolDefine((string[] add, string[] rm) define)
+        {
+            StringBuilder sb = new StringBuilder();
+            if (define.add.Length > 0)
+            {
+                sb.Append('+');
+                sb.AppendJoin('+', define.add);
+            }
+            if (define.rm.Length > 0)
+            {
+                sb.Append('-');
+                sb.AppendJoin('-', define.rm);
+            }
+
+            return sb.ToString();
         }
     }
 }

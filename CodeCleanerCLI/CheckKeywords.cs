@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
@@ -12,85 +13,107 @@ namespace CodeCleanerCLI
 {
     static class CheckKeywords
     {
-        public static async Task<IEnumerable<string>> Run(Solution solution, IEnumerable<Project> projects,
+        private static int visitCount, skipCount;
+        private static ILogger _logger;
+        
+        public static async Task<bool> Run(Solution solution, IEnumerable<Project> projects,
             IEnumerable<(string[] add, string[] rm)> symbolGroups, IEnumerable<string> keywords, ILogger logger)
         {
-            List<SyntaxToken> fired = new List<SyntaxToken>();
-            int visitCount = 0;
-            int skipCount = 0;
+            logger.WriteLine($"begin check keywords at {DateTime.Now}");
+            var cacheKeywords = keywords as string[] ?? keywords.ToArray();
+            logger.WriteLine($"keywords: {string.Join(",", cacheKeywords)}");
+
+            _logger = logger;
+            
+            visitCount = 0;
+            skipCount = 0;
+            
             var projectInstances = solution.ApplyProjectSymbols(projects, symbolGroups);
-            SyntaxToken checkingToken = default;
-            foreach (var project in projectInstances)
+
+            var scanTasks = projectInstances.Select(p => ScanProjectAsync(p, cacheKeywords).ToListAsync().AsTask());
+            var fired = (await Task.WhenAll(scanTasks)).SelectMany(t => t).ToList();
+
+            logger.WriteLine($"visit {visitCount} tokens, skip {skipCount}({skipCount*100f/visitCount:F1}%), found {fired.Count}.");
+            var pathBase = Path.GetDirectoryName(solution.FilePath);
+            foreach (var f in fired)
             {
-                foreach (Document d in project.Documents)
+                var lineSpan = f.GetLocation().GetLineSpan();
+                logger.WriteLine($"  --> {f.Text} in {lineSpan.Path.Replace(pathBase!, String.Empty)}[line {lineSpan.StartLinePosition.Line+1}])");
+            }
+            logger.WriteLine($"finish check keywords at {DateTime.Now}");
+
+            return fired.Count > 0;
+        }
+
+        private static async IAsyncEnumerable<SyntaxToken> ScanProjectAsync(Project project,
+            IEnumerable<string> keywords)
+        {
+            // _logger.WriteLine($"scaning {project.Name}");
+            foreach (Document d in project.Documents)
+            {
+                await foreach (var token in ScanDocumentAsync(d, keywords))
                 {
-                    SemanticModel m = await d.GetSemanticModelAsync();
-                    var syntaxRoot = await d.GetSyntaxRootAsync();
-
-                    foreach (var node in syntaxRoot.DescendantNodes())
-                    {
-                        if (FireNode(node, keywords, ref checkingToken))
-                        {
-                            var ts = node.Span;
-                            var loc = node.GetLocation();
-                            var tree = node.SyntaxTree;
-                            
-                            var option = tree.Options as CSharpParseOptions ?? new CSharpParseOptions();
-                            option = option.WithPreprocessorSymbols("UNITY_IOS", "UNITY_IPHONE");
-                            var newTree = tree.WithRootAndOptions(syntaxRoot, option);
-                            
-                            var compilation = m.Compilation.ReplaceSyntaxTree(tree, newTree);
-                            var diagnostics = newTree.GetDiagnostics();
-                            try
-                            {
-                                var newNode = newTree.GetRoot().FindNode(ts);
-                                if (FireNode(newNode, keywords, ref checkingToken))
-                                {
-                                    fired.Add(checkingToken);
-                                }
-                            }
-                            catch (Exception e)
-                            {
-                                
-                            }
-                        }
-                    }
-
-                    // foreach (var token in syntaxRoot.DescendantTokens())
-                    // {
-                    //     visitCount++;
-                    //     var kind = token.Kind();
-                    //     if (IsReservedKeyword(kind) 
-                    //         || IsContextualKeyword(kind) 
-                    //         || IsQueryContextualKeyword(kind)
-                    //         || IsPreprocessorKeyword(kind)
-                    //         || IsTypeParameterVarianceKeyword(kind)
-                    //         || IsPunctuationOrKeyword(kind)
-                    //         || IsAccessorDeclarationKeyword(kind)
-                    //         )
-                    //     {
-                    //         skipCount++;
-                    //         continue;
-                    //     }
-                    //
-                    //     if (!token.Text.ContainsAny(keywords)) continue;
-                    //
-                    //     /// 预编译：
-                    //     /// 被非ios预编译，pass
-                    //     /// 1. 不被预编译，error
-                    //     /// 2. 被ios预编译，error
-                    //
-                    //     if (IsConditionalCompiledWithout(token, "UNITY_IOS")) continue;
-                    //     {
-                    //         fired.Add(token);
-                    //     }
-                    // }
+                    yield return token;
                 }
             }
-            
-            logger.WriteLine($"visit {visitCount} tokens, skip {skipCount}({skipCount*100f/visitCount:F1}%), found {fired.Count}.");
+        }
 
-            return fired.Select(f => $"[{f.Kind()}]{f.Text} in {f.GetLocation()})");
+        private static async IAsyncEnumerable<SyntaxToken> ScanDocumentAsync(Document document, IEnumerable<string> keywords)
+        {
+            // logger.WriteLine($"  {d.Name}");
+            // SemanticModel m = await d.GetSemanticModelAsync();
+            var syntaxRoot = await document.GetSyntaxRootAsync();
+
+            // foreach (var node in syntaxRoot.DescendantNodes())
+            // {
+            //     if (FireNode(node, keywords, ref checkingToken))
+            //     {
+            //         var ts = node.Span;
+            //         var loc = node.GetLocation();
+            //         var tree = node.SyntaxTree;
+            //         
+            //         var option = tree.Options as CSharpParseOptions ?? new CSharpParseOptions();
+            //         option = option.WithPreprocessorSymbols("UNITY_IOS", "UNITY_IPHONE");
+            //         var newTree = tree.WithRootAndOptions(syntaxRoot, option);
+            //         
+            //         var compilation = m.Compilation.ReplaceSyntaxTree(tree, newTree);
+            //         var diagnostics = newTree.GetDiagnostics();
+            //         try
+            //         {
+            //             var newNode = newTree.GetRoot().FindNode(ts);
+            //             if (FireNode(newNode, keywords, ref checkingToken))
+            //             {
+            //                 fired.Add(checkingToken);
+            //             }
+            //         }
+            //         catch (Exception e)
+            //         {
+            //             
+            //         }
+            //     }
+            // }
+
+            foreach (var token in syntaxRoot.DescendantTokens())
+            {
+                visitCount++;
+                var kind = token.Kind();
+                if (IsReservedKeyword(kind) 
+                    || IsContextualKeyword(kind) 
+                    || IsQueryContextualKeyword(kind)
+                    || IsPreprocessorKeyword(kind)
+                    || IsTypeParameterVarianceKeyword(kind)
+                    || IsPunctuationOrKeyword(kind)
+                    || IsAccessorDeclarationKeyword(kind)
+                    )
+                {
+                    skipCount++;
+                    continue;
+                }
+            
+                if (!token.Text.ContainsAny(keywords)) continue;
+
+                yield return token;
+            }
         }
         
         private static bool FireNode(SyntaxNode node, IEnumerable<string> keywords, ref SyntaxToken target)

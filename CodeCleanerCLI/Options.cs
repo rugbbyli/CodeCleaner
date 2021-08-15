@@ -52,6 +52,9 @@ namespace CodeCleanerCLI
             }
         }
         
+        [Option("block-words", HelpText = "block words, needed if action was CheckBlockWords")]
+        public IEnumerable<string> BlockWords { get; set; }
+        
         [Option('d', "dry-run", Required = false, HelpText = "set true to not actually save changes.")]
         public bool DryRun { get; set; }
         
@@ -65,6 +68,7 @@ namespace CodeCleanerCLI
         {
             RemoveUnusedType,
             RemoveUnusedFile,
+            CheckBlockWords,
         }
     }
 }

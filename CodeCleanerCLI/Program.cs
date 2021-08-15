@@ -1,4 +1,4 @@
-﻿using Microsoft.Build.Locator;
+using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -19,7 +19,7 @@ namespace CodeCleanerCLI
     {
         private static ILogger _logger;
         
-        static async Task Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
 #if DEBUG
             var option = UnityProfile.BuildOption();
@@ -33,10 +33,15 @@ namespace CodeCleanerCLI
             
             var parserResult = Parser.Default.ParseArguments<Options>(args);
 
-            parserResult.WithNotParsed(errs => DisplayHelp(parserResult, errs));
-            //parserResult.WithParsed(o => _logger.WriteLine(JsonConvert.SerializeObject(o)));
-            
-            await parserResult.WithParsedAsync(Work);
+            if (parserResult is Parsed<Options> opt)
+            {
+                return await Work(opt.Value);
+            }
+            else
+            {
+                parserResult.WithNotParsed(errs => DisplayHelp(parserResult, errs));
+                return 0;
+            }
 #endif
         }
         
@@ -51,13 +56,14 @@ namespace CodeCleanerCLI
             _logger.WriteLine(helpText);
         }
         
-        static async Task Work(Options options)
+        static async Task<int> Work(Options options)
         {
+            int exitCode = 0;
             _logger.WriteLine($"solution: {options.SolutionPath}");
 
             MSBuildLocator.RegisterDefaults();
             using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
-            workspace.WorkspaceFailed += Workspace_WorkspaceFailed;
+            // workspace.WorkspaceFailed += Workspace_WorkspaceFailed;
 
             List<Project> projects = new List<Project>();
             Solution solution = await workspace.OpenSolutionAsync(options.SolutionPath);
@@ -88,12 +94,20 @@ namespace CodeCleanerCLI
                 _logger.WriteLine($"==================remove not used files=====================");
                 solution = await CheckFilesAndRemove(solution, projects, allPlatformSymbols, FilterDoc);
             }
+            else if (options.Action == Options.ActionType.CheckBlockWords)
+            {
+                _logger.WriteLine($"=================check block words=================");
+                var fired = await CheckKeywords.Run(solution, projects, allPlatformSymbols, options.BlockWords, _logger);
+                if (fired) exitCode = 1;
+            }
             if (options.DryRun == false)
             {
                 var ret = workspace.TryApplyChanges(solution);
                 _logger.WriteLine($"finish and save changes, result: {ret}");
             }
             (_logger as IDisposable)?.Dispose();
+
+            return exitCode;
         }
 
         private static async Task<Solution> RemoveUnUsedTypes(Solution solution, IEnumerable<Project> projects, IEnumerable<(string[] add, string[] rm)> platforms, Func<Document, bool> documentFilter, IEnumerable<string> ignoreBaseTypes)
@@ -523,16 +537,6 @@ namespace CodeCleanerCLI
             return documentRoot.DescendantNodes().Any(n => n is TypeDeclarationSyntax || n is EnumDeclarationSyntax);
         }
 
-        public static Solution WithChangeSymbols(this Solution solution, IEnumerable<string> addSymbols, IEnumerable<string> removeSymbols)
-        {
-            foreach (var project in solution.Projects)
-            {
-                solution = solution.WithProjectParseOptions(project.Id, project.OptionWithChangeSymbols(addSymbols, removeSymbols));
-            }
-
-            return solution;
-        }
-        
         public static CSharpParseOptions OptionWithChangeSymbols(this Project project, IEnumerable<string> addSymbols, IEnumerable<string> removeSymbols)
         {
             var rawOption = project.ParseOptions as CSharpParseOptions ?? new CSharpParseOptions(
