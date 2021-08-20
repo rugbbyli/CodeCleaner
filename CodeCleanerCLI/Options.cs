@@ -20,7 +20,10 @@ namespace CodeCleanerCLI
         public IEnumerable<string> IgnoreBaseTypes { get; set; }
 
         [Option("project", Required = false, HelpText = "Input project name to only work on specific projects.")]
-        public IEnumerable<string> ProjectNames { get; set; }
+        public IEnumerable<string> IncludeProjects { get; set; }
+        [Option("exclude-projects", Required = false, HelpText = "project names to exclude.")]
+        public IEnumerable<string> ExcludeProjects { get; set; }
+
         [Option("define", Required = false, HelpText = "define preprocessor symbols, format: +A+B-C-D, means add symbol A and B, remove symbol C and D.")]
         public IEnumerable<string> _rawDefineList { get; set; }
         public IEnumerable<Defines> DefineList
@@ -51,7 +54,18 @@ namespace CodeCleanerCLI
                 });
             }
         }
-        
+
+        [Option("block-word-dimensions")]
+        public IEnumerable<string> _blockWordDimensions { get; set; }
+
+        public string[][][] BlockWordDimensions
+        {
+            get
+            {
+                return _blockWordDimensions.Select(d => d.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(w => w.Split(',', StringSplitOptions.RemoveEmptyEntries)).ToArray()).ToArray();
+            }
+        }
+
         [Option('d', "dry-run", Required = false, HelpText = "set true to not actually save changes.")]
         public bool DryRun { get; set; }
         
@@ -65,6 +79,7 @@ namespace CodeCleanerCLI
         {
             RemoveUnusedType,
             RemoveUnusedFile,
+            CheckBlockWords,
         }
     }
 }
