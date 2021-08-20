@@ -11,17 +11,16 @@ using static Microsoft.CodeAnalysis.CSharp.SyntaxFacts;
 
 namespace CodeCleanerCLI
 {
-    static class CheckKeywords
+    static class CheckBlockWords
     {
         private static int visitCount, skipCount;
         private static ILogger _logger;
         
         public static async Task<bool> Run(Solution solution, IEnumerable<Project> projects,
-            IEnumerable<(string[] add, string[] rm)> symbolGroups, IEnumerable<string> keywords, ILogger logger)
+            IEnumerable<(string[] add, string[] rm)> symbolGroups, IEnumerable<IEnumerable<IEnumerable<string>>> blockWordDimensions, ILogger logger)
         {
-            logger.WriteLine($"begin check keywords at {DateTime.Now}");
-            var cacheKeywords = keywords as string[] ?? keywords.ToArray();
-            logger.WriteLine($"keywords: {string.Join(",", cacheKeywords)}");
+            logger.WriteLine($"begin scan block words at {DateTime.Now}");
+            logger.WriteLine($"block word dimensions: {string.Join("|", blockWordDimensions.Select(d => string.Join(';', d.Select(w => string.Join(',', w)))))}");
 
             _logger = logger;
             
@@ -30,7 +29,7 @@ namespace CodeCleanerCLI
             
             var projectInstances = solution.ApplyProjectSymbols(projects, symbolGroups);
 
-            var scanTasks = projectInstances.Select(p => ScanProjectAsync(p, cacheKeywords).ToListAsync().AsTask());
+            var scanTasks = projectInstances.Select(p => ScanProjectAsync(p, blockWordDimensions).ToListAsync().AsTask());
             var fired = (await Task.WhenAll(scanTasks)).SelectMany(t => t).ToList();
 
             logger.WriteLine($"visit {visitCount} tokens, skip {skipCount}({skipCount*100f/visitCount:F1}%), found {fired.Count}.");
@@ -40,29 +39,38 @@ namespace CodeCleanerCLI
                 var lineSpan = f.GetLocation().GetLineSpan();
                 logger.WriteLine($"  --> {f.Text} in {lineSpan.Path.Replace(pathBase!, String.Empty)}[line {lineSpan.StartLinePosition.Line+1}])");
             }
-            logger.WriteLine($"finish check keywords at {DateTime.Now}");
+            logger.WriteLine($"finish scan block words at {DateTime.Now}");
 
             return fired.Count > 0;
         }
 
-        private static async IAsyncEnumerable<SyntaxToken> ScanProjectAsync(Project project,
-            IEnumerable<string> keywords)
+        private static async IAsyncEnumerable<SyntaxToken> ScanProjectAsync(Project project, IEnumerable<IEnumerable<IEnumerable<string>>> blockWordDimensions)
         {
             // _logger.WriteLine($"scaning {project.Name}");
             foreach (Document d in project.Documents)
             {
-                await foreach (var token in ScanDocumentAsync(d, keywords))
+                await foreach (var token in ScanDocumentAsync(d, blockWordDimensions))
                 {
                     yield return token;
                 }
             }
         }
 
-        private static async IAsyncEnumerable<SyntaxToken> ScanDocumentAsync(Document document, IEnumerable<string> keywords)
+        private static async IAsyncEnumerable<SyntaxToken> ScanDocumentAsync(Document document, IEnumerable<IEnumerable<IEnumerable<string>>> blockWordDimensions)
         {
             // logger.WriteLine($"  {d.Name}");
-            // SemanticModel m = await d.GetSemanticModelAsync();
+            
             var syntaxRoot = await document.GetSyntaxRootAsync();
+
+            // check filename
+            var fileName = document.Name;
+            if (fileName.ContainsAnyOfAll(blockWordDimensions))
+            {
+                if(syntaxRoot.DescendantNodes().Any())
+                    yield return syntaxRoot.DescendantTokens().First();
+            }
+            
+            // SemanticModel m = await d.GetSemanticModelAsync();
 
             // foreach (var node in syntaxRoot.DescendantNodes())
             // {
@@ -110,9 +118,10 @@ namespace CodeCleanerCLI
                     continue;
                 }
             
-                if (!token.Text.ContainsAny(keywords)) continue;
-
-                yield return token;
+                //fired with dimension config?
+                var tokenContent = token.Text;
+                if(tokenContent.ContainsAnyOfAll(blockWordDimensions))
+                    yield return token;
             }
         }
         
@@ -204,5 +213,17 @@ namespace CodeCleanerCLI
         {
             return look.Any(i => str.Contains(i, StringComparison.CurrentCultureIgnoreCase));
         }
+
+        private static bool ContainsAnyOfAll(this string str, IEnumerable<IEnumerable<IEnumerable<string>>> look)
+        {
+            return look.Any(i => i.All(str.ContainsAny));
+        }
+
+        // private static (int begin, int end) FindAny(this string str, IEnumerable<string> look)
+        // {
+        //     var word = look.FirstOrDefault(l => str.Contains(str));
+        //     if (word == null) return default;
+        //     return (str.IndexOf())  //xiaomiapp
+        // }
     }
 }

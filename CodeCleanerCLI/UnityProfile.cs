@@ -44,7 +44,7 @@ namespace CodeCleanerCLI
             return new Options()
             {
                 SolutionPath = SolutionPath,
-                ProjectNames = ProjectNames,
+                IncludeProjects = ProjectNames,
                 IgnorePaths = ignorePaths,
                 IgnoreBaseTypes = IgnoreBaseTypes,
                 _rawDefineList = EnumUnityPlatformSymbols().Select(FormatSymbolDefine),

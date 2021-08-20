@@ -21,28 +21,27 @@ namespace CodeCleanerCLI
         
         static async Task<int> Main(string[] args)
         {
-#if DEBUG
-            var option = UnityProfile.BuildOption();
-            option.Action = Options.ActionType.RemoveUnusedType;
-            option.DryRun = true;
-            _logger = new FileLogger(Path.Combine(Environment.CurrentDirectory, $"{option.Action.ToString()}-{DateTime.Now}.log")){WriteToConsole = true};
-
-            await Work(option);
-#else
-            _logger = new ConsoleLogger();
-            
             var parserResult = Parser.Default.ParseArguments<Options>(args);
 
             if (parserResult is Parsed<Options> opt)
             {
-                return await Work(opt.Value);
+                var options = opt.Value;
+#if DEBUG
+                options.SolutionPath = "/Volumes/hjdclient.3d/hjdclient.3d/hjdclient.3d.sln";
+                // _logger = new FileLogger(Path.Combine(Environment.CurrentDirectory, $"{options.Action.ToString()}-{DateTime.Now}.log")){WriteToConsole = true};
+                _logger = new ConsoleLogger();
+#else         
+                _logger = new ConsoleLogger();
+#endif
+                return await Work(options);
             }
             else
             {
+                _logger = new ConsoleLogger();
                 parserResult.WithNotParsed(errs => DisplayHelp(parserResult, errs));
                 return 0;
             }
-#endif
+
         }
         
         static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
@@ -67,9 +66,13 @@ namespace CodeCleanerCLI
 
             List<Project> projects = new List<Project>();
             Solution solution = await workspace.OpenSolutionAsync(options.SolutionPath);
-            if (options.ProjectNames.Any())
+            if (options.IncludeProjects.Any())
             {
-                projects.AddRange(options.ProjectNames.Select(name => solution.Projects.FirstOrDefault(p => p.Name == name)).Where(p => p != null).Distinct());
+                projects.AddRange(options.IncludeProjects.Select(name => solution.Projects.FirstOrDefault(p => p.Name == name)).Where(p => p != null).Distinct());
+            }
+            else if (options.ExcludeProjects.Any())
+            {
+                projects.AddRange(solution.Projects.Where(p => !options.ExcludeProjects.Contains(p.Name)).Distinct());
             }
             else
             {
@@ -97,7 +100,7 @@ namespace CodeCleanerCLI
             else if (options.Action == Options.ActionType.CheckBlockWords)
             {
                 _logger.WriteLine($"=================check block words=================");
-                var fired = await CheckKeywords.Run(solution, projects, allPlatformSymbols, options.BlockWords, _logger);
+                var fired = await CheckBlockWords.Run(solution, projects, allPlatformSymbols, options.BlockWordDimensions, _logger);
                 if (fired) exitCode = 1;
             }
             if (options.DryRun == false)
