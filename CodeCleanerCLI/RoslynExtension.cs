@@ -95,13 +95,17 @@ namespace CodeCleanerCLI
 
         public static bool IsInheritFromAny(this INamedTypeSymbol symbol, IEnumerable<string> baseTypeNames)
         {
-            while (symbol.BaseType != null)
-            {
-                if (baseTypeNames.Contains($"{symbol.BaseType.ContainingNamespace}.{symbol.BaseType.Name}")) return true;
-                symbol = symbol.BaseType;
-            }
             
-            return false;
+            var parent = symbol.BaseType;
+            while (parent != null)
+            {
+                if (baseTypeNames.Contains($"{parent.ContainingNamespace}.{parent.Name}")) return true;
+                parent = parent.BaseType;
+            }
+
+            return symbol.AllInterfaces.Any(i => baseTypeNames.Contains($"{i.ContainingNamespace}.{i.Name}"));
+
+            // return false;
         }
 
         public static Project GetDefineProject(this ISymbol symbol, Solution solution)

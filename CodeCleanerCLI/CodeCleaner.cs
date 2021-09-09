@@ -191,24 +191,29 @@ namespace CodeCleanerCLI
             logger.WriteLine($"[usedBySelf]-------{usedBySelfTypes.Count}---------");
             foreach (var type in usedBySelfTypes)
             {
-                logger.WriteLine($"[usedBySelf]{type.Name}");
+                logger.WriteLine($"[usedBySelf]{Format(type)}");
             }
 
             logger.WriteLine($"[usedByNotUsed]-------{usedByNotUsedTypeTypes.Count}---------");
             foreach (var type in usedByNotUsedTypeTypes)
             {
-                logger.WriteLine($"[usedByNotUsed]{type.Name}");
+                logger.WriteLine($"[usedByNotUsed]{Format(type)}");
             }
 
             logger.WriteLine($"[notUsed]-------{notUsedTypes.Count}---------");
             foreach (var type in notUsedTypes)
             {
-                logger.WriteLine($"[notUsed]{type.Name}");
+                logger.WriteLine($"[notUsed]{Format(type)}");
             }
 
             solution = await solution.RemoveSymbolsDefinitionAsync(notUsedTypes.Concat(usedBySelfTypes)
                 .Concat(usedByNotUsedTypeTypes));
             return solution;
+        }
+
+        private static string Format(ISymbol symbol)
+        {
+            return $"{symbol.Name} in {symbol.Locations[0].GetLineSpan()}";
         }
 
         public static async Task<bool> AnyRefMatch(this ISymbol symbol, Solution solution,

@@ -87,7 +87,7 @@ namespace CodeCleanerCLI
             if(options.Action == Options.ActionType.RemoveUnusedType)
             {
                 _logger.WriteLine($"==================remove not used type=====================");
-                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc, options.IgnoreBaseTypes, _logger);
+                solution = await RemoveUnUsedTypes(solution, projects, allPlatformSymbols, FilterDoc, options.IgnoreBaseTypes.ToArray(), _logger);
             }
             else if(options.Action == Options.ActionType.RemoveUnusedFile)
             {
